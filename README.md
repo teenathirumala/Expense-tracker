@@ -1,6 +1,6 @@
 # 💸 Expense Tracker — MERN Full Stack App
 
-![Backend tests](https://github.com/<your-username>/expense-tracker/actions/workflows/tests.yml/badge.svg)
+![Backend tests](https://github.com/teenathirumala/expense-tracker/actions/workflows/tests.yml/badge.svg)
 
 A full-stack expense tracker where users sign up, log their spending, set a monthly budget, and see where their money goes with interactive charts.
 
