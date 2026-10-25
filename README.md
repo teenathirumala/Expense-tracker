@@ -92,8 +92,28 @@ Tests use a throwaway in-memory MongoDB, so no database setup is needed. (The fi
 3. **Frontend → Vercel:** Import repo → root `client` → env var `VITE_API_URL` = your Render URL.
 4. MongoDB Atlas → Network Access → allow `0.0.0.0/0`.
 
-## 🔮 Future Improvements
-- Recurring expenses (rent, subscriptions)
-- Per-category budgets
-- Refresh tokens and httpOnly cookies instead of localStorage
-- Frontend tests with React Testing Library
+
+##  Future Improvements Roadmap
+
+The project is being upgraded in three levels, from a working app to a production-style backend. Items are ticked off as they ship.
+
+### Level 1 — Production basics 🚧 In progress
+- [ ] Request validation with **Zod** on every body, query and URL param (blocks NoSQL injection)
+- [ ] **Pagination** with stable ordering and a max page size of 100
+- [ ] **Compound MongoDB indexes** designed around the real query patterns
+- [ ] **Rate limiting** — strict per-IP limit on login/register, general limit on the API
+- [ ] **Structured JSON logging** (pino) with a request ID on every request
+- [ ] **API docs** — OpenAPI 3 spec with Swagger UI at `/api/docs`
+- [ ] Health check with DB status, graceful shutdown, central error handling
+
+### Level 2 — Backend engineering 📋 Planned
+- [ ] **Refresh tokens** in httpOnly cookies (short-lived access tokens + rotation)
+- [ ] **Redis caching** for analytics endpoints, cleared whenever expenses change
+- [ ] **Redis-backed rate limiting** so limits hold across multiple server instances
+- [ ] **Background jobs (BullMQ)** — recurring expenses (rent, subscriptions) and budget-alert emails, with retries
+- [ ] Benchmark script to measure response times before and after caching
+
+### Level 3 — DevOps & deployment 📋 Planned
+- [ ] **Dockerfile** (multi-stage) and **Docker Compose** for API + MongoDB + Redis in one command
+- [ ] **Kubernetes manifests** — Deployment, Service, ConfigMap/Secret, readiness and liveness probes
+- [ ] **CI/CD pipeline** — run tests, build and push a Docker image, deploy on merge to `main`
