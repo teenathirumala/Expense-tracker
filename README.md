@@ -4,7 +4,7 @@
 
 A full-stack expense tracker where users sign up, log their spending, set a monthly budget, and see where their money goes with interactive charts.
 
-**Live demo:** _add your Vercel link here_ · **API:** _add your Render link here_
+**Live demo:** https://expense-tracker-one-woad.vercel.app/ **API:** https://expense-tracker-api-79eg.onrender.com
 
 <!-- Add a screenshot or GIF here: ![Dashboard](docs/dashboard.png) -->
 
