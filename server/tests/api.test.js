@@ -68,6 +68,33 @@ describe("Auth", () => {
     expect(res.status).toBe(200);
     expect(res.body.token).toEqual(expect.any(String));
   });
+
+    test("rejects a MongoDB operator as the email (NoSQL injection)", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ email: { $gt: "" }, password: "anything" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0]).toEqual({ field: "email", message: "Email must be text" });
+  });
+
+  test("lists every invalid field when registering", async () => {
+    const res = await request(app)
+      .post("/api/auth/register")
+      .send({ name: "", email: "not-an-email", password: "123" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors.map((e) => e.field).sort()).toEqual(["email", "name", "password"]);
+  });
+
+  test("cleans the email before login (spaces and capitals)", async () => {
+    await signup("asha@test.com");
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "  ASHA@Test.com ", password: "secret123" });
+
+    expect(res.status).toBe(200);
+  });
 });
 
 // ---------- expenses ----------

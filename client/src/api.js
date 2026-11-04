@@ -7,7 +7,9 @@ const authHeader = () => {
 
 async function toError(res, fallback) {
   const data = await res.json().catch(() => ({}));
-  const err = new Error(data.message || fallback);
+  // Validation errors come back as a list per field, shows the specific messages
+  const message = data.errors?.length ? data.errors.map((e) => e.message).join(". ") : data.message;
+  const err = new Error(message || fallback);
   err.status = res.status;
   return err;
 }
