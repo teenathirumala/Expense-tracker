@@ -199,6 +199,42 @@ describe("Expenses", () => {
       { period: "2026-10-07", total: 50 },
     ]);
   });
+
+  test("rejects a date that doesn't exist", async () => {
+    const token = await signup();
+    const res = await addExpense(token, { date: "2026-02-30" });
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0]).toEqual({ field: "date", message: "Date does not exist" });
+  });
+
+  test("rejects an amount sent as text", async () => {
+    const token = await signup();
+    const res = await addExpense(token, { amount: "lots" });
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0].field).toBe("amount");
+  });
+
+  test("rejects a malformed expense id", async () => {
+    const token = await signup();
+    const res = await request(app).delete("/api/expenses/123").set(bearer(token));
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0].field).toBe("id");
+  });
+
+  test("rejects a date range where from is after to", async () => {
+    const token = await signup();
+    const res = await request(app).get("/api/expenses/summary?from=2026-10-31&to=2026-10-01").set(bearer(token));
+    expect(res.status).toBe(400);
+  });
+
+  test("ignores a user field sent in the body (mass assignment)", async () => {
+    const token = await signup();
+    // Try to create an expense owned by some other user id
+    await addExpense(token, { user: "6718a9c2f1d2e3a4b5c6d7e8" });
+
+    const res = await request(app).get("/api/expenses").set(bearer(token));
+    expect(res.body).toHaveLength(1); // still belongs to the logged-in user
+  });
 });
 
 // ---------- budget ----------
