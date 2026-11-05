@@ -6,6 +6,8 @@ import expenseRoutes from "./routes/expenses.js";
 import budgetRoutes from "./routes/budget.js";
 import { createLimiter } from "./middleware/rateLimit.js";
 import { requestLogger } from "./middleware/requestLogger.js";
+import swaggerUi from "swagger-ui-express";
+import { openapiSpec } from "./docs/openapi.js";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 
@@ -39,6 +41,12 @@ export function createApp({
     res.status(dbUp ? 200 : 503).json({ status: dbUp ? "ok" : "degraded", db: dbUp ? "up" : "down" });
   });
 
+    // API docs: the raw OpenAPI spec as JSON, and the interactive Swagger UI page.
+  // Above the rate limiters, so reading the docs never uses up anyone's limit.
+  app.get("/api/openapi.json", (req, res) => res.json(openapiSpec));
+  app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openapiSpec, { customSiteTitle: "Expense Tracker API" }));
+
+  
   // Strict limit on login/register to slow down password guessing.
   app.use(
     "/api/auth",

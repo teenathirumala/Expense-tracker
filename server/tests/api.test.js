@@ -452,4 +452,17 @@ describe("Request IDs and error handling", () => {
     const res = await addExpense(token, { title: "x".repeat(200_000) }); // ~200 KB, limit is 100 KB
     expect(res.status).toBe(413);
   });
+
+    test("serves the OpenAPI spec and the Swagger UI page", async () => {
+    const spec = await request(app).get("/api/openapi.json");
+    expect(spec.status).toBe(200);
+    expect(spec.body.openapi).toMatch(/^3\./);
+    expect(Object.keys(spec.body.paths)).toEqual(
+      expect.arrayContaining(["/api/auth/login", "/api/expenses", "/api/expenses/{id}", "/api/budget"])
+    );
+
+    const ui = await request(app).get("/api/docs/");
+    expect(ui.status).toBe(200);
+    expect(ui.text).toMatch(/swagger/i);
+  });
 });
