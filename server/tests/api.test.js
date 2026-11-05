@@ -111,8 +111,8 @@ describe("Expenses", () => {
 
     const res = await request(app).get("/api/expenses").set(bearer(token));
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0]).toMatchObject({ title: "Groceries", amount: 850, category: "Food" });
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ title: "Groceries", amount: 850, category: "Food" });
   });
 
   test("rejects an expense with no title", async () => {
@@ -142,7 +142,7 @@ describe("Expenses", () => {
     expect(deleted.status).toBe(200);
 
     const list = await request(app).get("/api/expenses").set(bearer(token));
-    expect(list.body).toHaveLength(0);
+    expect(list.body.data).toHaveLength(0);
   });
 
   test("users cannot see or delete each other's expenses", async () => {
@@ -151,7 +151,7 @@ describe("Expenses", () => {
     const { body: aliceExpense } = await addExpense(alice);
 
     const bobList = await request(app).get("/api/expenses").set(bearer(bob));
-    expect(bobList.body).toHaveLength(0);
+    expect(bobList.body.data).toHaveLength(0);
 
     const bobDelete = await request(app).delete(`/api/expenses/${aliceExpense._id}`).set(bearer(bob));
     expect(bobDelete.status).toBe(404);
@@ -163,7 +163,7 @@ describe("Expenses", () => {
     await addExpense(token, { title: "October rent", date: "2026-10-31" });
 
     const res = await request(app).get("/api/expenses?from=2026-10-01&to=2026-10-31").set(bearer(token));
-    expect(res.body.map((e) => e.title)).toEqual(["October rent"]);
+    expect(res.body.data.map((e) => e.title)).toEqual(["October rent"]);
   });
 
   test("rejects an invalid date and an unknown category", async () => {
@@ -233,7 +233,7 @@ describe("Expenses", () => {
     await addExpense(token, { user: "6718a9c2f1d2e3a4b5c6d7e8" });
 
     const res = await request(app).get("/api/expenses").set(bearer(token));
-    expect(res.body).toHaveLength(1); // still belongs to the logged-in user
+    expect(res.body.data).toHaveLength(1); // still belongs to the logged-in user
   });
 });
 
@@ -278,5 +278,60 @@ describe("CSV export", () => {
       '2026-10-05,"Pizza, drinks",Food,450',
       "2026-10-06,'=HYPERLINK(evil),Food,10",
     ]);
+  });
+});
+
+// ---------- pagination ----------
+describe("Pagination", () => {
+  async function addMany(token, count) {
+    for (let i = 1; i <= count; i++) {
+      const day = String(i).padStart(2, "0"); // 01, 02, ... 25
+      await addExpense(token, { title: `Expense ${i}`, date: `2026-10-${day}` });
+    }
+  }
+
+  test("returns one page plus pagination info", async () => {
+    const token = await signup();
+    await addMany(token, 25);
+
+    const res = await request(app).get("/api/expenses?page=1&limit=10").set(bearer(token));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(10);
+    expect(res.body.data[0].title).toBe("Expense 25"); // newest first
+    expect(res.body.pagination).toEqual({ page: 1, limit: 10, total: 25, totalPages: 3 });
+  });
+
+  test("returns the remaining items on the last page", async () => {
+    const token = await signup();
+    await addMany(token, 25);
+
+    const res = await request(app).get("/api/expenses?page=3&limit=10").set(bearer(token));
+    expect(res.body.data.map((e) => e.title)).toEqual(["Expense 5", "Expense 4", "Expense 3", "Expense 2", "Expense 1"]);
+  });
+
+  test("never repeats or skips items when dates are the same", async () => {
+    const token = await signup();
+    for (let i = 0; i < 7; i++) await addExpense(token, { title: `Same day ${i}`, date: "2026-10-10" });
+
+    const titles = [];
+    for (let page = 1; page <= 3; page++) {
+      const res = await request(app).get(`/api/expenses?page=${page}&limit=3`).set(bearer(token));
+      titles.push(...res.body.data.map((e) => e.title));
+    }
+    expect(titles).toHaveLength(7);
+    expect(new Set(titles).size).toBe(7); // all 7 different = no repeats, no gaps
+  });
+
+  test("defaults to page 1 with 20 items", async () => {
+    const token = await signup();
+    const res = await request(app).get("/api/expenses").set(bearer(token));
+    expect(res.body.pagination).toMatchObject({ page: 1, limit: 20 });
+  });
+
+  test("caps the page size at 100", async () => {
+    const token = await signup();
+    const res = await request(app).get("/api/expenses?limit=1000").set(bearer(token));
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0]).toEqual({ field: "limit", message: "Limit cannot exceed 100" });
   });
 });

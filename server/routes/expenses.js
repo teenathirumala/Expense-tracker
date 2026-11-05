@@ -4,17 +4,32 @@ import validate from "../middleware/validate.js";
 import Expense from "../models/Expense.js";
 import { buildExpenseFilter } from "../utils/filters.js";
 import { toCsv } from "../utils/csv.js";
-import { expenseBody, idParams, rangeQuery, filterQuery } from "../validation/schemas.js";
-
+import { expenseBody, idParams, rangeQuery, filterQuery, listQuery } from "../validation/schemas.js";
 const router = Router();
 router.use(auth);
 
-// GET /api/expenses?from=2026-10-01&to=2026-10-31&category=Food
-router.get("/", validate({ query: filterQuery }), async (req, res, next) => {
+// GET /api/expenses?from&to&category&page=1&limit=20  ->  { data, pagination }
+router.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
-    const filter = buildExpenseFilter(req.userId, req.valid.query);
-    const expenses = await Expense.find(filter).sort({ date: -1, createdAt: -1 });
-    res.json(expenses);
+    const { page, limit, ...filters } = req.valid.query;
+    const filter = buildExpenseFilter(req.userId, filters);
+
+    // Run the page query and the total count at the same time.
+    // _id is a tie-breaker: expenses with the same date always keep the same order,
+    // so an item can never appear on two pages or be skipped.
+    const [data, total] = await Promise.all([
+      Expense.find(filter)
+        .sort({ date: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Expense.countDocuments(filter),
+    ]);
+
+    res.json({
+      data,
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+    });
   } catch (err) {
     next(err);
   }
