@@ -1,7 +1,11 @@
 import request from "supertest";
 import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import app from "../app.js";
+
+import { createApp } from "../app.js";
+// Huge limits for the normal tests: this file signs up many users, which would otherwise hit the 10-per-15-minutes login limit.
+const app = createApp({ authLimit: 10_000, apiLimit: 10_000 });
+
 import Expense from "../models/Expense.js";
 
 // Each test run spins up a throwaway in-memory MongoDB, so no real database is touched.
@@ -361,5 +365,40 @@ describe("Database indexes", () => {
 
     expect(winningPlan).toContain("IXSCAN");
     expect(winningPlan).not.toContain("COLLSCAN");
+  });
+});
+
+// ---------- rate limiting ----------
+describe("Rate limiting", () => {
+  test("blocks login after too many attempts from one IP", async () => {
+    const limitedApp = createApp({ authLimit: 3, apiLimit: 10_000 });
+    const attempt = () => request(limitedApp).post("/api/auth/login").send({ email: "x@test.com", password: "guess" });
+
+    // The first 3 attempts reach the login code (wrong password -> 401)
+    for (let i = 0; i < 3; i++) {
+      expect((await attempt()).status).toBe(401);
+    }
+
+    // The 4th is blocked before the login code runs
+    const blocked = await attempt();
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.message).toMatch(/too many login attempts/i);
+    expect(blocked.headers).toHaveProperty("ratelimit"); // tells the client when to retry
+  });
+
+  test("limits general API traffic separately from login", async () => {
+    const limitedApp = createApp({ authLimit: 10_000, apiLimit: 2 });
+    await request(limitedApp).get("/api/expenses");
+    await request(limitedApp).get("/api/expenses");
+
+    const res = await request(limitedApp).get("/api/expenses");
+    expect(res.status).toBe(429);
+  });
+
+  test("never rate limits the health check", async () => {
+    const limitedApp = createApp({ authLimit: 1, apiLimit: 1 });
+    for (let i = 0; i < 5; i++) {
+      expect((await request(limitedApp).get("/api/health")).status).toBe(200);
+    }
   });
 });
