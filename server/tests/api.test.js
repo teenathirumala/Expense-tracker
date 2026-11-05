@@ -1,7 +1,12 @@
 import request from "supertest";
 import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import app from "../app.js";
+
+import { createApp } from "../app.js";
+// Huge limits for the normal tests: this file signs up many users, which would otherwise hit the 10-per-15-minutes login limit.
+const app = createApp({ authLimit: 10_000, apiLimit: 10_000 });
+
+import Expense from "../models/Expense.js";
 
 // Each test run spins up a throwaway in-memory MongoDB, so no real database is touched.
 let mongo;
@@ -111,8 +116,8 @@ describe("Expenses", () => {
 
     const res = await request(app).get("/api/expenses").set(bearer(token));
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0]).toMatchObject({ title: "Groceries", amount: 850, category: "Food" });
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ title: "Groceries", amount: 850, category: "Food" });
   });
 
   test("rejects an expense with no title", async () => {
@@ -142,7 +147,7 @@ describe("Expenses", () => {
     expect(deleted.status).toBe(200);
 
     const list = await request(app).get("/api/expenses").set(bearer(token));
-    expect(list.body).toHaveLength(0);
+    expect(list.body.data).toHaveLength(0);
   });
 
   test("users cannot see or delete each other's expenses", async () => {
@@ -151,7 +156,7 @@ describe("Expenses", () => {
     const { body: aliceExpense } = await addExpense(alice);
 
     const bobList = await request(app).get("/api/expenses").set(bearer(bob));
-    expect(bobList.body).toHaveLength(0);
+    expect(bobList.body.data).toHaveLength(0);
 
     const bobDelete = await request(app).delete(`/api/expenses/${aliceExpense._id}`).set(bearer(bob));
     expect(bobDelete.status).toBe(404);
@@ -163,7 +168,7 @@ describe("Expenses", () => {
     await addExpense(token, { title: "October rent", date: "2026-10-31" });
 
     const res = await request(app).get("/api/expenses?from=2026-10-01&to=2026-10-31").set(bearer(token));
-    expect(res.body.map((e) => e.title)).toEqual(["October rent"]);
+    expect(res.body.data.map((e) => e.title)).toEqual(["October rent"]);
   });
 
   test("rejects an invalid date and an unknown category", async () => {
@@ -233,7 +238,7 @@ describe("Expenses", () => {
     await addExpense(token, { user: "6718a9c2f1d2e3a4b5c6d7e8" });
 
     const res = await request(app).get("/api/expenses").set(bearer(token));
-    expect(res.body).toHaveLength(1); // still belongs to the logged-in user
+    expect(res.body.data).toHaveLength(1); // still belongs to the logged-in user
   });
 });
 
@@ -278,5 +283,186 @@ describe("CSV export", () => {
       '2026-10-05,"Pizza, drinks",Food,450',
       "2026-10-06,'=HYPERLINK(evil),Food,10",
     ]);
+  });
+});
+
+// ---------- pagination ----------
+describe("Pagination", () => {
+  async function addMany(token, count) {
+    for (let i = 1; i <= count; i++) {
+      const day = String(i).padStart(2, "0"); // 01, 02, ... 25
+      await addExpense(token, { title: `Expense ${i}`, date: `2026-10-${day}` });
+    }
+  }
+
+  test("returns one page plus pagination info", async () => {
+    const token = await signup();
+    await addMany(token, 25);
+
+    const res = await request(app).get("/api/expenses?page=1&limit=10").set(bearer(token));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(10);
+    expect(res.body.data[0].title).toBe("Expense 25"); // newest first
+    expect(res.body.pagination).toEqual({ page: 1, limit: 10, total: 25, totalPages: 3 });
+  });
+
+  test("returns the remaining items on the last page", async () => {
+    const token = await signup();
+    await addMany(token, 25);
+
+    const res = await request(app).get("/api/expenses?page=3&limit=10").set(bearer(token));
+    expect(res.body.data.map((e) => e.title)).toEqual(["Expense 5", "Expense 4", "Expense 3", "Expense 2", "Expense 1"]);
+  });
+
+  test("never repeats or skips items when dates are the same", async () => {
+    const token = await signup();
+    for (let i = 0; i < 7; i++) await addExpense(token, { title: `Same day ${i}`, date: "2026-10-10" });
+
+    const titles = [];
+    for (let page = 1; page <= 3; page++) {
+      const res = await request(app).get(`/api/expenses?page=${page}&limit=3`).set(bearer(token));
+      titles.push(...res.body.data.map((e) => e.title));
+    }
+    expect(titles).toHaveLength(7);
+    expect(new Set(titles).size).toBe(7); // all 7 different = no repeats, no gaps
+  });
+
+  test("defaults to page 1 with 20 items", async () => {
+    const token = await signup();
+    const res = await request(app).get("/api/expenses").set(bearer(token));
+    expect(res.body.pagination).toMatchObject({ page: 1, limit: 20 });
+  });
+
+  test("caps the page size at 100", async () => {
+    const token = await signup();
+    const res = await request(app).get("/api/expenses?limit=1000").set(bearer(token));
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0]).toEqual({ field: "limit", message: "Limit cannot exceed 100" });
+  });
+});
+
+// ---------- indexes ----------
+describe("Database indexes", () => {
+  test("creates compound indexes for the main query patterns", async () => {
+    await Expense.syncIndexes(); // make sure indexes exist (they're dropped with the test database)
+    const indexes = await mongoose.connection.collection("expenses").indexes();
+    const keys = indexes.map((i) => i.key);
+
+    expect(keys).toContainEqual({ user: 1, date: -1 });
+    expect(keys).toContainEqual({ user: 1, category: 1, date: -1 });
+  });
+
+  test("the expense list query uses an index, not a full collection scan", async () => {
+    await Expense.syncIndexes();
+    const token = await signup();
+    await addExpense(token);
+    const userId = (await Expense.findOne()).user;
+
+    // Ask MongoDB HOW it would run the query, instead of running it
+    const result = await Expense.find({ user: userId }).sort({ date: -1 }).explain("queryPlanner");
+    const plan = Array.isArray(result) ? result[0] : result;
+    const winningPlan = JSON.stringify(plan.queryPlanner.winningPlan);
+
+    expect(winningPlan).toContain("IXSCAN");
+    expect(winningPlan).not.toContain("COLLSCAN");
+  });
+});
+
+// ---------- rate limiting ----------
+describe("Rate limiting", () => {
+  test("blocks login after too many attempts from one IP", async () => {
+    const limitedApp = createApp({ authLimit: 3, apiLimit: 10_000 });
+    const attempt = () => request(limitedApp).post("/api/auth/login").send({ email: "x@test.com", password: "guess" });
+
+    // The first 3 attempts reach the login code (wrong password -> 401)
+    for (let i = 0; i < 3; i++) {
+      expect((await attempt()).status).toBe(401);
+    }
+
+    // The 4th is blocked before the login code runs
+    const blocked = await attempt();
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.message).toMatch(/too many login attempts/i);
+    expect(blocked.headers).toHaveProperty("ratelimit"); // tells the client when to retry
+  });
+
+  test("limits general API traffic separately from login", async () => {
+    const limitedApp = createApp({ authLimit: 10_000, apiLimit: 2 });
+    await request(limitedApp).get("/api/expenses");
+    await request(limitedApp).get("/api/expenses");
+
+    const res = await request(limitedApp).get("/api/expenses");
+    expect(res.status).toBe(429);
+  });
+
+  test("never rate limits the health check", async () => {
+    const limitedApp = createApp({ authLimit: 1, apiLimit: 1 });
+    for (let i = 0; i < 5; i++) {
+      expect((await request(limitedApp).get("/api/health")).status).toBe(200);
+    }
+  });
+});
+
+// ---------- request IDs, errors, health ----------
+describe("Request IDs and error handling", () => {
+  test("gives every response a unique X-Request-Id", async () => {
+    const a = await request(app).get("/api/health");
+    const b = await request(app).get("/api/health");
+    expect(a.headers["x-request-id"]).toBeDefined();
+    expect(a.headers["x-request-id"]).not.toBe(b.headers["x-request-id"]);
+  });
+
+  test("reuses a safe incoming request ID and ignores an unsafe one", async () => {
+    const safe = await request(app).get("/api/health").set("X-Request-Id", "trace-abc-123");
+    expect(safe.headers["x-request-id"]).toBe("trace-abc-123");
+
+    const unsafe = await request(app).get("/api/health").set("X-Request-Id", "<script>alert(1)</script>");
+    expect(unsafe.headers["x-request-id"]).not.toBe("<script>alert(1)</script>");
+  });
+
+  test("includes the request ID in error responses", async () => {
+    const res = await request(app).post("/api/auth/login").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.requestId).toBe(res.headers["x-request-id"]);
+  });
+
+  test("reports database status in the health check", async () => {
+    const res = await request(app).get("/api/health");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: "ok", db: "up" });
+  });
+
+  test("returns a JSON 404 for unknown API routes", async () => {
+    const res = await request(app).get("/api/does-not-exist");
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe("Route not found");
+  });
+
+  test("returns 400 for malformed JSON instead of crashing", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .set("Content-Type", "application/json")
+      .send('{"email": "a@b.com",'); // cut off mid-way
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Request body is not valid JSON");
+  });
+
+  test("rejects a request body that is too large", async () => {
+    const token = await signup();
+    const res = await addExpense(token, { title: "x".repeat(200_000) }); // ~200 KB, limit is 100 KB
+    expect(res.status).toBe(413);
+  });
+
+    test("serves the OpenAPI spec and the Swagger UI page", async () => {
+    const spec = await request(app).get("/api/openapi.json");
+    expect(spec.status).toBe(200);
+    expect(spec.body.openapi).toMatch(/^3\./);
+    expect(Object.keys(spec.body.paths)).toEqual(
+      expect.arrayContaining(["/api/auth/login", "/api/expenses", "/api/expenses/{id}", "/api/budget"])
+    );
+
+    const ui = await request(app).get("/api/docs/");
+    expect(ui.status).toBe(200);
+    expect(ui.text).toMatch(/swagger/i);
   });
 });

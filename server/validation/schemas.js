@@ -79,15 +79,39 @@ export const idParams = z.object({
 });
 
 // Query for summary and trend: ?from&to
+// Query for summary and trend: ?from&to
 export const rangeQuery = z
   .object({ from: isoDate.optional(), to: isoDate.optional() })
   .refine(fromBeforeTo, fromBeforeToError);
 
-// Query for the list and CSV export: ?from&to&category
-export const filterQuery = z
-  .object({ from: isoDate.optional(), to: isoDate.optional(), category: category.optional() })
-  .refine(fromBeforeTo, fromBeforeToError);
+// Filter fields shared by the CSV export and the paginated list
+const filterFields = {
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+  category: category.optional(),
+};
 
+// Query for the CSV export: ?from&to&category (all matching rows, no pages)
+export const filterQuery = z.object(filterFields).refine(fromBeforeTo, fromBeforeToError);
+
+// Query for the list: ?from&to&category&page=1&limit=20
+// Query values always arrive as text ("2"), so z.coerce turns them into numbers first.
+export const listQuery = z
+  .object({
+    ...filterFields,
+    page: z.coerce
+      .number({ invalid_type_error: "Page must be a number" })
+      .int("Page must be a whole number")
+      .min(1, "Page must be 1 or more")
+      .default(1),
+    limit: z.coerce
+      .number({ invalid_type_error: "Limit must be a number" })
+      .int("Limit must be a whole number")
+      .min(1, "Limit must be 1 or more")
+      .max(100, "Limit cannot exceed 100")
+      .default(20),
+  })
+  .refine(fromBeforeTo, fromBeforeToError);
 // ---------- budget ----------
 
 export const budgetBody = z.object({
