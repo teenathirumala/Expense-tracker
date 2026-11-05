@@ -402,3 +402,54 @@ describe("Rate limiting", () => {
     }
   });
 });
+
+// ---------- request IDs, errors, health ----------
+describe("Request IDs and error handling", () => {
+  test("gives every response a unique X-Request-Id", async () => {
+    const a = await request(app).get("/api/health");
+    const b = await request(app).get("/api/health");
+    expect(a.headers["x-request-id"]).toBeDefined();
+    expect(a.headers["x-request-id"]).not.toBe(b.headers["x-request-id"]);
+  });
+
+  test("reuses a safe incoming request ID and ignores an unsafe one", async () => {
+    const safe = await request(app).get("/api/health").set("X-Request-Id", "trace-abc-123");
+    expect(safe.headers["x-request-id"]).toBe("trace-abc-123");
+
+    const unsafe = await request(app).get("/api/health").set("X-Request-Id", "<script>alert(1)</script>");
+    expect(unsafe.headers["x-request-id"]).not.toBe("<script>alert(1)</script>");
+  });
+
+  test("includes the request ID in error responses", async () => {
+    const res = await request(app).post("/api/auth/login").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.requestId).toBe(res.headers["x-request-id"]);
+  });
+
+  test("reports database status in the health check", async () => {
+    const res = await request(app).get("/api/health");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: "ok", db: "up" });
+  });
+
+  test("returns a JSON 404 for unknown API routes", async () => {
+    const res = await request(app).get("/api/does-not-exist");
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe("Route not found");
+  });
+
+  test("returns 400 for malformed JSON instead of crashing", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .set("Content-Type", "application/json")
+      .send('{"email": "a@b.com",'); // cut off mid-way
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Request body is not valid JSON");
+  });
+
+  test("rejects a request body that is too large", async () => {
+    const token = await signup();
+    const res = await addExpense(token, { title: "x".repeat(200_000) }); // ~200 KB, limit is 100 KB
+    expect(res.status).toBe(413);
+  });
+});

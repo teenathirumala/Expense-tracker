@@ -10,6 +10,6 @@ export function createLimiter({ windowMs, limit, message }) {
     limit,
     standardHeaders: "draft-7", // send a RateLimit header: how many requests are left, and when it resets
     legacyHeaders: false, // don't also send the older X-RateLimit-* headers
-    handler: (req, res) => res.status(429).json({ message }),
+       handler: (req, res) => res.status(429).json({ message, requestId: req.id }),
   });
 }
