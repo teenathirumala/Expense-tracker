@@ -2,6 +2,7 @@ import request from "supertest";
 import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import app from "../app.js";
+import Expense from "../models/Expense.js";
 
 // Each test run spins up a throwaway in-memory MongoDB, so no real database is touched.
 let mongo;
@@ -333,5 +334,32 @@ describe("Pagination", () => {
     const res = await request(app).get("/api/expenses?limit=1000").set(bearer(token));
     expect(res.status).toBe(400);
     expect(res.body.errors[0]).toEqual({ field: "limit", message: "Limit cannot exceed 100" });
+  });
+});
+
+// ---------- indexes ----------
+describe("Database indexes", () => {
+  test("creates compound indexes for the main query patterns", async () => {
+    await Expense.syncIndexes(); // make sure indexes exist (they're dropped with the test database)
+    const indexes = await mongoose.connection.collection("expenses").indexes();
+    const keys = indexes.map((i) => i.key);
+
+    expect(keys).toContainEqual({ user: 1, date: -1 });
+    expect(keys).toContainEqual({ user: 1, category: 1, date: -1 });
+  });
+
+  test("the expense list query uses an index, not a full collection scan", async () => {
+    await Expense.syncIndexes();
+    const token = await signup();
+    await addExpense(token);
+    const userId = (await Expense.findOne()).user;
+
+    // Ask MongoDB HOW it would run the query, instead of running it
+    const result = await Expense.find({ user: userId }).sort({ date: -1 }).explain("queryPlanner");
+    const plan = Array.isArray(result) ? result[0] : result;
+    const winningPlan = JSON.stringify(plan.queryPlanner.winningPlan);
+
+    expect(winningPlan).toContain("IXSCAN");
+    expect(winningPlan).not.toContain("COLLSCAN");
   });
 });
