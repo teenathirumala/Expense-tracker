@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 import auth from "../middleware/auth.js";
 import User from "../models/User.js";
 import Expense from "../models/Expense.js";
+import validate from "../middleware/validate.js";
+import { budgetBody } from "../validation/schemas.js";
 
 const router = Router();
 router.use(auth);
@@ -46,13 +48,10 @@ router.get("/", async (req, res, next) => {
 });
 
 // PUT /api/budget  { monthlyBudget: 15000 }   (0 clears the budget)
-router.put("/", async (req, res, next) => {
+// PUT /api/budget  { monthlyBudget: 15000 }   (0 clears the budget)
+router.put("/", validate({ body: budgetBody }), async (req, res, next) => {
   try {
-    const value = Number(req.body.monthlyBudget);
-    if (!Number.isFinite(value) || value < 0) {
-      return res.status(400).json({ message: "Budget must be a number of 0 or more" });
-    }
-    await User.findByIdAndUpdate(req.userId, { monthlyBudget: value });
+    await User.findByIdAndUpdate(req.userId, { monthlyBudget: req.valid.body.monthlyBudget });
     res.json(await budgetStatus(req.userId));
   } catch (err) {
     next(err);

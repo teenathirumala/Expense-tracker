@@ -12,30 +12,22 @@ function parseDate(value, name) {
   if (typeof value !== "string" || isNaN(date)) throw badRequest(`Invalid "${name}" date`);
   return date;
 }
+  //Builds a MongoDB filter from query values that validate() has ALREADY checked.
+  //  - from , to are Date objects (midnight UTC); "to" is inclusive, so we match everything before midnight of the following day.
+  //  - category is already one of the allowed categories.
+export function buildExpenseFilter(userId, { from, to, category } = {}) {
+  const filter = { user: new mongoose.Types.ObjectId(userId) };
 
-/**
- * Builds a MongoDB filter from ?from=YYYY-MM-DD&to=YYYY-MM-DD&category=Food.
- * Dates are stored as UTC midnight, and "to" is inclusive (whole day).
- */
-export function buildExpenseFilter(req, { includeCategory = true } = {}) {
-  const filter = { user: new mongoose.Types.ObjectId(req.userId) };
-  const { category, from, to } = req.query;
-
-  if (includeCategory && category) {
-    // Only accept known string values — blocks NoSQL operator injection like ?category[$ne]=x
-    if (typeof category !== "string" || !CATEGORIES.includes(category)) throw badRequest("Invalid category");
-    filter.category = category;
-  }
+  if (category) filter.category = category;
 
   if (from || to) {
     filter.date = {};
-    if (from) filter.date.$gte = parseDate(from, "from");
+    if (from) filter.date.$gte = from;
     if (to) {
-      const end = parseDate(to, "to");
+      const end = new Date(to); // copy, so we don't change the validated value
       end.setUTCDate(end.getUTCDate() + 1);
       filter.date.$lt = end;
     }
-    if (from && to && filter.date.$gte >= filter.date.$lt) throw badRequest('"from" must be before "to"');
   }
 
   return filter;
