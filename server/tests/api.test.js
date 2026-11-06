@@ -7,7 +7,7 @@ const app = createApp({ authLimit: 10_000, apiLimit: 10_000 });
 import Expense from "../models/Expense.js";
 import RedisMock from "ioredis-mock";
 import { setRedisClient } from "../cache.js";
-
+import Redis from "ioredis";
 // Each test run spins up a throwaway in-memory MongoDB, so no real database is touched.
 let mongo;
 
@@ -566,5 +566,58 @@ describe("Analytics caching", () => {
 
     const added = await addExpense(token); // invalidation fails too, but the write must still succeed
     expect(added.status).toBe(201);
+  });
+});
+
+// ---------- rate limiting with Redis (multiple servers) ----------
+// Runs only when TEST_REDIS_URL is set (locally, or in CI with a Redis service).
+const describeWithRedis = process.env.TEST_REDIS_URL ? describe : describe.skip;
+
+describeWithRedis("Rate limiting shared through Redis", () => {
+  const connect = async (extra = {}) => {
+    // db 15 = a separate Redis database just for tests, so flushdb never touches real data
+    const client = new Redis(process.env.TEST_REDIS_URL, { db: 15, lazyConnect: true, maxRetriesPerRequest: 1, ...extra });
+    await client.connect();
+    return client;
+  };
+
+  let redis;
+  beforeAll(async () => {
+    redis = await connect();
+  });
+  beforeEach(async () => {
+    await redis.flushdb(); // reset all counts before each test
+  });
+  afterAll(async () => {
+    await redis.quit();
+  });
+
+  test("two server instances share one login limit", async () => {
+    // Two separate apps = two "servers", both using the same Redis
+    const serverA = createApp({ authLimit: 3, apiLimit: 10_000, redisClient: redis });
+    const serverB = createApp({ authLimit: 3, apiLimit: 10_000, redisClient: redis });
+    const attempt = (server) => request(server).post("/api/auth/login").send({ email: "x@test.com", password: "guess" });
+
+    expect((await attempt(serverA)).status).toBe(401);
+    expect((await attempt(serverB)).status).toBe(401);
+    expect((await attempt(serverA)).status).toBe(401);
+
+    // 4th attempt in total: blocked, even though each server has only seen 1–2 attempts itself
+    expect((await attempt(serverB)).status).toBe(429);
+  });
+
+  test("if Redis goes down, requests still work instead of failing (fail open)", async () => {
+    const client = await connect({ enableOfflineQueue: false });
+    const server = createApp({ authLimit: 3, apiLimit: 10_000, redisClient: client });
+    const attempt = () => request(server).post("/api/auth/login").send({ email: "x@test.com", password: "guess" });
+
+    expect((await attempt()).status).toBe(401); // normal
+
+    client.disconnect(); // simulate Redis going down
+
+    // Every attempt still reaches the login code (401). None crash with a 500.
+    for (let i = 0; i < 5; i++) {
+      expect((await attempt()).status).toBe(401);
+    }
   });
 });
