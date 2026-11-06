@@ -8,6 +8,17 @@ jobs:
     defaults:
       run:
         working-directory: server
+
+    # A real Redis running next to the tests, just for this job
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+
+    env:
+      TEST_REDIS_URL: redis://localhost:6379
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
