@@ -3,6 +3,7 @@ name: Backend tests
 on: [push, pull_request]
 
 jobs:
+  # ---------- Job 1: run the tests (on every push and pull request) ----------
   test:
     runs-on: ubuntu-latest
     defaults:
@@ -24,5 +25,53 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install
+      - run: npm ci
       - run: npm test
+
+  # ---------- Job 2: build the Docker image and push it to GitHub Container Registry ----------
+  # Only after the tests pass, and only for pushes to main (not for pull requests or other branches).
+  image:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    # Least privilege: this job may read the code and publish packages, nothing else.
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Lets one build produce images for both Intel/AMD (most servers) and ARM (Apple Silicon Macs)
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Log in to ghcr.io with the token GitHub gives every workflow run (no password to manage)
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Work out the image name and tags:
+      #   sha-<short commit id>  -> never changes, points to exactly this commit
+      #   latest                 -> moves to the newest build of main
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/expense-tracker-api
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Reuse layers from earlier builds, so unchanged steps (like npm ci) are skipped
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
