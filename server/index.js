@@ -6,6 +6,20 @@ dotenv.config();
 const { default: app } = await import("./app.js");
 const { logger } = await import("./logger.js");
 
+const { setRedisClient } = await import("./cache.js");
+// Caching is optional: only on when REDIS_URL is set.
+let redisClient = null;
+if (process.env.REDIS_URL) {
+  const { default: Redis } = await import("ioredis");
+  redisClient = new Redis(process.env.REDIS_URL, {
+    maxRetriesPerRequest: 1, // don't keep retrying a failed command; fail fast and use MongoDB
+    enableOfflineQueue: false, // if Redis is unreachable, fail immediately instead of queueing
+  });
+  redisClient.on("error", (err) => logger.warn({ err: err.message }, "Redis error"));
+  setRedisClient(redisClient);
+  logger.info("Redis caching enabled");
+}
+
 const PORT = process.env.PORT || 5001;
 
 // Connect to the database first; a server that can't reach its database shouldn't start.
