@@ -185,12 +185,14 @@ The tests start a throwaway **in-memory MongoDB**, so they never touch real data
 - [x] **API docs:** OpenAPI 3 spec with Swagger UI at `/api/docs`
 - [x] Health check with DB status, graceful shutdown, central error handling
 
-### Level 2 — Backend engineering 📋 Planned
-- [ ] **Load testing** with autocannon to measure throughput and latency before and after changes
-- [ ] **Redis caching** for analytics endpoints, cleared whenever expenses change
-- [ ] **Redis-backed rate limiting** so limits hold across multiple server instances
-- [ ] **Refresh tokens** in httpOnly cookies (short-lived access tokens + rotation)
-- [ ] **Background jobs (BullMQ):** recurring expenses and budget-alert emails, with retries
+### Level 2 — Backend engineering ✅ Done
+- [x] **Load testing** with autocannon: baseline and before/after numbers in `server/docs/PERFORMANCE.md`
+- [x] **Redis caching** for the analytics endpoints (cache-aside), cleared whenever expenses change, failing open if Redis is down
+- [x] **Redis-backed rate limiting**, so limits hold across multiple server instances
+
+### Future ideas
+- [ ] Refresh tokens in httpOnly cookies (short-lived access tokens + rotation)
+- [ ] Background jobs (BullMQ): recurring expenses and budget-alert emails, with retries
 
 ### Level 3 — DevOps & deployment 📋 Planned
 - [ ] **Dockerfile** (multi-stage) and **Docker Compose** for API + MongoDB + Redis in one command
