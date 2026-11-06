@@ -1,0 +1,46 @@
+# The whole backend: docker compose up --build
+# The frontend still runs with `npm run dev` in client/, and talks to the API on localhost:5001.
+# Settings shared by the api and worker (a YAML "anchor", reused below with <<: *app-env)
+x-app-env: &app-env
+  MONGO_URI: mongodb://mongo:27017/expense-tracker # "mongo" = the service name below
+  REDIS_URL: redis://redis:6379 # "redis" = the service name below
+  JWT_SECRET: ${JWT_SECRET:-local-dev-secret-change-me} # from your shell if set, else this local-only default
+  CLIENT_URL: http://localhost:5173
+  LOG_LEVEL: info
+
+services:
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongo-data:/data/db # keep the data when containers are removed
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # No "ports:": the database is only reachable by the other containers, not from outside.
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./server # build the image from server/Dockerfile
+    image: expense-tracker-api
+    ports:
+      - "5001:5001" # your Mac's port 5001 -> the container's port 5001
+    environment:
+      <<: *app-env
+    depends_on:
+      mongo:
+        condition: service_healthy # don't start until MongoDB answers its health check
+      redis:
+        condition: service_healthy
+    restart: unless-stopped # if it crashes, Docker starts it again
+
+volumes:
+  mongo-data:

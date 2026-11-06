@@ -1,0 +1,6 @@
+# A namespace is a separate "folder" inside the cluster for this app's resources.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: expense-tracker
+
