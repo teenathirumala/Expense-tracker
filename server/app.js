@@ -18,6 +18,7 @@ const FIFTEEN_MINUTES = 15 * 60 * 1000;
 export function createApp({
   authLimit = Number(process.env.AUTH_RATE_LIMIT) || 10, // login/register attempts per IP per 15 min
   apiLimit = Number(process.env.API_RATE_LIMIT) || 300, // all other API requests per IP per 15 min
+  redisClient = null, // when given, rate-limit counts are shared across servers via Redis
 } = {}) {
   const app = express();
 
@@ -46,14 +47,16 @@ export function createApp({
   app.get("/api/openapi.json", (req, res) => res.json(openapiSpec));
   app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openapiSpec, { customSiteTitle: "Expense Tracker API" }));
 
-  
+
   // Strict limit on login/register to slow down password guessing.
   app.use(
     "/api/auth",
-    createLimiter({ windowMs: FIFTEEN_MINUTES, limit: authLimit, message: "Too many login attempts. Try again in 15 minutes." })
+    createLimiter({ windowMs: FIFTEEN_MINUTES, limit: authLimit, message: "Too many login attempts. Try again in 15 minutes.", redisClient,
+      prefix: "rl:auth:",})
   );
   // General limit on the whole API, so one client can't flood the server.
-  app.use("/api", createLimiter({ windowMs: FIFTEEN_MINUTES, limit: apiLimit, message: "Too many requests. Please slow down." }));
+  app.use("/api", createLimiter({ windowMs: FIFTEEN_MINUTES, limit: apiLimit, message: "Too many requests. Please slow down.", redisClient,
+      prefix: "rl:api:", }));
 
   app.use("/api/auth", authRoutes);
   app.use("/api/expenses", expenseRoutes);
@@ -94,4 +97,4 @@ export function createApp({
 }
 
 // The real server's app, with the default limits.
-export default createApp();
+// export default createApp();

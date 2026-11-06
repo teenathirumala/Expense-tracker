@@ -56,3 +56,5 @@ h3 { font-size: 0.9rem; color: var(--muted); margin: 0 0 4px; font-weight: 600; 
 @media (max-width: 700px) { .charts { grid-template-columns: 1fr; } }
 .chart { min-width: 0; }
 .row select { width: auto; }
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 12px; }
+button:disabled { cursor: not-allowed; }

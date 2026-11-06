@@ -12,6 +12,7 @@ const PRESETS = [
   { label: "Last 30 days", from: () => daysAgoISO(29) },
   { label: "This year", from: yearStartISO },
 ];
+const PAGE_SIZE = 10;
 
 export default function Dashboard({ user, onLogout }) {
   const [expenses, setExpenses] = useState([]);
@@ -22,22 +23,34 @@ export default function Dashboard({ user, onLogout }) {
   const [category, setCategory] = useState("");
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState("");
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
 
   const rangeQuery = `from=${range.from}&to=${range.to}`;
   const listQuery = rangeQuery + (category ? `&category=${encodeURIComponent(category)}` : "");
   const rangeInvalid = !range.from || !range.to || range.from > range.to;
+
+  // The page number belongs to the current filters: change the dates or category
+  // and it automatically goes back to page 1.
+  const [pageState, setPageState] = useState({ filters: listQuery, page: 1 });
+  const page = pageState.filters === listQuery ? pageState.page : 1;
+  const goToPage = (p) => setPageState({ filters: listQuery, page: p });
 
   const load = useCallback(async () => {
     if (rangeInvalid) return setError("Pick a valid date range (start date before end date).");
     setError("");
     try {
       const [list, sum, tr, bud] = await Promise.all([
-        api(`/expenses?${listQuery}`),
+        api(`/expenses?${listQuery}&page=${page}&limit=${PAGE_SIZE}`),
         api(`/expenses/summary?${rangeQuery}`),
         api(`/expenses/trend?${rangeQuery}`),
         api("/budget"),
       ]);
-      setExpenses(list);
+      // If this page became empty (e.g. you deleted its last item), go back one page.
+      if (list.data.length === 0 && page > list.pagination.totalPages) {
+        return goToPage(list.pagination.totalPages);
+      }
+      setExpenses(list.data);
+      setPagination(list.pagination);
       setSummary(sum);
       setTrend(tr);
       setBudget(bud);
@@ -45,7 +58,7 @@ export default function Dashboard({ user, onLogout }) {
       if (err.status === 401) onLogout();
       else setError(err.message);
     }
-  }, [listQuery, rangeQuery, rangeInvalid, onLogout]);
+  }, [listQuery, rangeQuery, rangeInvalid, page, onLogout]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { load(); }, [load]);
 
@@ -116,7 +129,7 @@ export default function Dashboard({ user, onLogout }) {
               <option value="">All categories</option>
               {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
             </select>
-            <button className="ghost" onClick={exportCsv} disabled={expenses.length === 0}>⬇ Export CSV</button>
+            <button className="ghost" onClick={exportCsv} disabled={pagination.total === 0}>⬇ Export CSV</button>
           </div>
         </div>
 
@@ -138,6 +151,20 @@ export default function Dashboard({ user, onLogout }) {
               </li>
             ))}
           </ul>
+        )}
+
+        {pagination.totalPages > 1 && (
+          <div className="pager">
+            <button className="ghost small" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
+              ← Prev
+            </button>
+            <span className="muted small">
+              Page {pagination.page} of {pagination.totalPages} · {pagination.total} expenses
+            </span>
+            <button className="ghost small" disabled={page >= pagination.totalPages} onClick={() => goToPage(page + 1)}>
+              Next →
+            </button>
+          </div>
         )}
       </div>
     </div>

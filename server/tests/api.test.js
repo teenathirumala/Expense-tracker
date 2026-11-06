@@ -1,13 +1,13 @@
 import request from "supertest";
 import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
-
 import { createApp } from "../app.js";
 // Huge limits for the normal tests: this file signs up many users, which would otherwise hit the 10-per-15-minutes login limit.
 const app = createApp({ authLimit: 10_000, apiLimit: 10_000 });
-
 import Expense from "../models/Expense.js";
-
+import RedisMock from "ioredis-mock";
+import { setRedisClient } from "../cache.js";
+import Redis from "ioredis";
 // Each test run spins up a throwaway in-memory MongoDB, so no real database is touched.
 let mongo;
 
@@ -464,5 +464,160 @@ describe("Request IDs and error handling", () => {
     const ui = await request(app).get("/api/docs/");
     expect(ui.status).toBe(200);
     expect(ui.text).toMatch(/swagger/i);
+  });
+});
+
+// ---------- analytics caching ----------
+describe("Analytics caching", () => {
+  let redis;
+  const SUMMARY = "/api/expenses/summary?from=2026-10-01&to=2026-10-31";
+
+  beforeEach(() => {
+    redis = new RedisMock();
+    setRedisClient(redis); // turn caching on for these tests only
+  });
+
+  afterEach(async () => {
+    await redis.flushall(); // empty the fake Redis
+    setRedisClient(null); // turn caching off again for every other test
+  });
+
+  test("the first summary request is a MISS, the second a HIT with the same data", async () => {
+    const token = await signup();
+    await addExpense(token, { amount: 300, date: "2026-10-05" });
+
+    const first = await request(app).get(SUMMARY).set(bearer(token));
+    expect(first.headers["x-cache"]).toBe("MISS");
+
+    const second = await request(app).get(SUMMARY).set(bearer(token));
+    expect(second.headers["x-cache"]).toBe("HIT");
+    expect(second.body).toEqual(first.body);
+  });
+
+  test("caches the trend endpoint too", async () => {
+    const token = await signup();
+    await addExpense(token, { date: "2026-10-05" });
+    const url = "/api/expenses/trend?from=2026-10-01&to=2026-10-31";
+
+    expect((await request(app).get(url).set(bearer(token))).headers["x-cache"]).toBe("MISS");
+    expect((await request(app).get(url).set(bearer(token))).headers["x-cache"]).toBe("HIT");
+  });
+
+  test("adding an expense clears the cache, so totals are never stale", async () => {
+    const token = await signup();
+    await addExpense(token, { amount: 300, date: "2026-10-05" });
+    await request(app).get(SUMMARY).set(bearer(token)); // now cached
+
+    await addExpense(token, { amount: 200, date: "2026-10-06" });
+
+    const after = await request(app).get(SUMMARY).set(bearer(token));
+    expect(after.headers["x-cache"]).toBe("MISS");
+    expect(after.body.grandTotal).toBe(500);
+  });
+
+  test("editing and deleting an expense also clear the cache", async () => {
+    const token = await signup();
+    const { body: expense } = await addExpense(token, { amount: 300, date: "2026-10-05" });
+
+    await request(app).get(SUMMARY).set(bearer(token)); // cached
+    await request(app)
+      .put(`/api/expenses/${expense._id}`)
+      .set(bearer(token))
+      .send({ title: "Lunch", amount: 999, category: "Food", date: "2026-10-05" });
+    const afterEdit = await request(app).get(SUMMARY).set(bearer(token));
+    expect(afterEdit.headers["x-cache"]).toBe("MISS");
+    expect(afterEdit.body.grandTotal).toBe(999);
+
+    await request(app).delete(`/api/expenses/${expense._id}`).set(bearer(token));
+    const afterDelete = await request(app).get(SUMMARY).set(bearer(token));
+    expect(afterDelete.headers["x-cache"]).toBe("MISS");
+    expect(afterDelete.body.grandTotal).toBe(0);
+  });
+
+  test("different date ranges are cached separately", async () => {
+    const token = await signup();
+    await addExpense(token, { date: "2026-10-05" });
+
+    await request(app).get(SUMMARY).set(bearer(token)); // October cached
+    const september = await request(app).get("/api/expenses/summary?from=2026-09-01&to=2026-09-30").set(bearer(token));
+    expect(september.headers["x-cache"]).toBe("MISS");
+  });
+
+  test("users never see each other's cached results", async () => {
+    const alice = await signup("alice@test.com");
+    const bob = await signup("bob@test.com");
+    await addExpense(alice, { amount: 300, date: "2026-10-05" });
+    await request(app).get(SUMMARY).set(bearer(alice)); // Alice's result cached
+
+    const bobs = await request(app).get(SUMMARY).set(bearer(bob));
+    expect(bobs.headers["x-cache"]).toBe("MISS");
+    expect(bobs.body.grandTotal).toBe(0);
+  });
+
+  test("if Redis fails, requests still work (fail open)", async () => {
+    const broken = async () => {
+      throw new Error("Redis is down");
+    };
+    setRedisClient({ hget: broken, hset: broken, expire: broken, del: broken });
+
+    const token = await signup();
+    const res = await request(app).get(SUMMARY).set(bearer(token));
+    expect(res.status).toBe(200);
+
+    const added = await addExpense(token); // invalidation fails too, but the write must still succeed
+    expect(added.status).toBe(201);
+  });
+});
+
+// ---------- rate limiting with Redis (multiple servers) ----------
+// Runs only when TEST_REDIS_URL is set (locally, or in CI with a Redis service).
+const describeWithRedis = process.env.TEST_REDIS_URL ? describe : describe.skip;
+
+describeWithRedis("Rate limiting shared through Redis", () => {
+  const connect = async (extra = {}) => {
+    // db 15 = a separate Redis database just for tests, so flushdb never touches real data
+    const client = new Redis(process.env.TEST_REDIS_URL, { db: 15, lazyConnect: true, maxRetriesPerRequest: 1, ...extra });
+    await client.connect();
+    return client;
+  };
+
+  let redis;
+  beforeAll(async () => {
+    redis = await connect();
+  });
+  beforeEach(async () => {
+    await redis.flushdb(); // reset all counts before each test
+  });
+  afterAll(async () => {
+    await redis.quit();
+  });
+
+  test("two server instances share one login limit", async () => {
+    // Two separate apps = two "servers", both using the same Redis
+    const serverA = createApp({ authLimit: 3, apiLimit: 10_000, redisClient: redis });
+    const serverB = createApp({ authLimit: 3, apiLimit: 10_000, redisClient: redis });
+    const attempt = (server) => request(server).post("/api/auth/login").send({ email: "x@test.com", password: "guess" });
+
+    expect((await attempt(serverA)).status).toBe(401);
+    expect((await attempt(serverB)).status).toBe(401);
+    expect((await attempt(serverA)).status).toBe(401);
+
+    // 4th attempt in total: blocked, even though each server has only seen 1–2 attempts itself
+    expect((await attempt(serverB)).status).toBe(429);
+  });
+
+  test("if Redis goes down, requests still work instead of failing (fail open)", async () => {
+    const client = await connect({ enableOfflineQueue: false });
+    const server = createApp({ authLimit: 3, apiLimit: 10_000, redisClient: client });
+    const attempt = () => request(server).post("/api/auth/login").send({ email: "x@test.com", password: "guess" });
+
+    expect((await attempt()).status).toBe(401); // normal
+
+    client.disconnect(); // simulate Redis going down
+
+    // Every attempt still reaches the login code (401). None crash with a 500.
+    for (let i = 0; i < 5; i++) {
+      expect((await attempt()).status).toBe(401);
+    }
   });
 });
