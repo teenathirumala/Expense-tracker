@@ -1,0 +1,62 @@
+# MongoDB for LOCAL learning only. In production you'd use a managed database
+# (like Atlas) or a StatefulSet, not a single Deployment.
+
+# Storage that survives pod restarts
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongo-data
+  namespace: expense-tracker
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo
+  namespace: expense-tracker
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # only one pod may use the volume at a time
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:7
+          ports:
+            - containerPort: 27017
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mongo-data
+---
+# A stable name ("mongo") and address for the database, reachable only inside the cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: expense-tracker
+spec:
+  selector:
+    app: mongo
+  ports:
+    - port: 27017
+      targetPort: 27017

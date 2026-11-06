@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: expense-tracker
+spec:
+  replicas: 2 # two copies: if one crashes or is being updated, the other keeps serving
+  selector:
+    matchLabels:
+      app: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0 # never go below 2 ready pods during an update...
+      maxSurge: 1 # ...by starting 1 new pod before stopping an old one
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      terminationGracePeriodSeconds: 30 # time for our graceful shutdown to finish in-flight requests
+      containers:
+        - name: api
+          image: expense-tracker-api:1.0.0
+          imagePullPolicy: IfNotPresent # use the image you built locally; don't download it
+          ports:
+            - containerPort: 5001
+          envFrom:
+            - configMapRef:
+                name: api-config # PORT, LOG_LEVEL, CLIENT_URL, REDIS_URL
+            - secretRef:
+                name: api-secrets # JWT_SECRET, MONGO_URI
+          # Readiness: "can this pod take traffic right now?" (checks the database too).
+          # If it fails, the pod is taken OUT of the Service, but NOT restarted.
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 5001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          # Liveness: "is the process stuck?" (doesn't check the database).
+          # If it fails, Kubernetes RESTARTS the container.
+          livenessProbe:
+            httpGet:
+              path: /api/live
+              port: 5001
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: # what the scheduler reserves for each pod
+              cpu: 100m # 0.1 of a CPU core
+              memory: 128Mi
+            limits: # the most it may use (going over the memory limit kills the pod)
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000 # the "node" user in the official Node image
+            allowPrivilegeEscalation: false
+---
+# The API's stable address. It load-balances across all READY api pods.
+# type LoadBalancer: on Docker Desktop this makes it reachable at localhost:5001.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: expense-tracker
+spec:
+  type: LoadBalancer
+  selector:
+    app: api
+  ports:
+    - port: 5001
+      targetPort: 5001

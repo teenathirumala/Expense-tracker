@@ -34,6 +34,9 @@ export function createApp({
   app.use(cors({ origin: process.env.CLIENT_URL || "*", exposedHeaders: ["X-Request-Id"] }));
   app.use(express.json({ limit: "100kb" })); // reject huge bodies
 
+  // Liveness: "is the process running and able to answer?" Deliberately does NOT
+  // check the database, so a database outage doesn't make Kubernetes restart the API.
+  app.get("/api/live", (req, res) => res.json({ status: "alive", version: "1.0.1" }));
   // Health check: also reports whether the database is reachable.
   // 503 = "I'm running but can't do my job", which tells Render/Kubernetes not to send traffic.
   // Comes BEFORE the limiters, so monitoring is never blocked.

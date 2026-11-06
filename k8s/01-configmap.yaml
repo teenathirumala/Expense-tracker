@@ -1,0 +1,11 @@
+# Settings that are NOT secret. Pods read these as environment variables.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: expense-tracker
+data:
+  PORT: "5001"
+  LOG_LEVEL: "info"
+  CLIENT_URL: "http://localhost:5173"
+  REDIS_URL: "redis://redis:6379" # "redis" = the Service name in 03-redis.yaml

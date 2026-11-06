@@ -465,6 +465,12 @@ describe("Request IDs and error handling", () => {
     expect(ui.status).toBe(200);
     expect(ui.text).toMatch(/swagger/i);
   });
+  
+    test("the liveness endpoint answers without checking the database", async () => {
+    const res = await request(app).get("/api/live");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: "alive" });
+  });
 });
 
 // ---------- analytics caching ----------
