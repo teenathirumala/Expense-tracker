@@ -2,7 +2,6 @@
 
 **A production-style Node.js backend: validated, Redis-cached, load-tested, containerised and shipped through CI/CD.**
 
-![Backend tests](https://github.com/teenathirumala/ledgerly/actions/workflows/tests.yml/badge.svg)
 
 Ledgerly is a full-stack personal finance app: users sign up, log their spending, set a monthly budget and see where their money goes. The focus is the **backend**: a secure, validated, cached and observable REST API, load-tested and benchmarked, containerised with Docker, deployable to Kubernetes, and shipped through a CI/CD pipeline.
 
